@@ -42,7 +42,12 @@ region in 640x480 units (e.g. `0,0,641,481` for a full repaint) and invalidates 
 screens looked fine. Two more shims fix it: `SelectClipRgn` on a window DC rebuilds the region at 2x
 (`GetRegionData` -> scale -> `ExtCreateRegion`; bounding-box fallback for regions over 3.5 KB), and `InvalidateRect`
 scales its rect. Entries +65 / +70 of the `.mtk` jump table; thunks VA 0x4D036B and 0x4D0173.
-Status: verified on Windows 11 (splash, title card and intro fill the 1280x960 client area).
+Hotspot hit-tests and cursor changes use a third source of mouse coordinates. Besides the child proc's `lParam` (halved
+by `mouse_hook`) the engine keeps a copy of the pump's current message at 0x513338 and `FUN_004b1762` (the "mouse position"
+getter behind the hover/cursor/click hit-tests, `FUN_004a3246`) reads x/y from that raw `lParam`. Unhalved, hotspots only
+matched while the pointer was in the top-left 640x480 real pixels. `msgpt_fix` (entry +75) halves it at the read
+(hook VA 0x4B17A1).
+Status: verified on Windows 11 (splash, title card and intro fill the 1280x960 client area; button hover works everywhere).
 
 ## Repository contents
 - `tools/`  patch + conversion tools (`build_game.py` builds a ready folder from your own `MISSION_CD.iso`)

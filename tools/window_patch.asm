@@ -35,6 +35,7 @@ entry_table:
   jmp near raw_stc       ; +60
   jmp near invrect_shim  ; +65
   jmp near scr_shim      ; +70
+  jmp near msgpt_fix     ; +75
 
 ; RECT* screen_rect(RECT* out): replaces FUN_004b0150 ("screen rect").
 ; Before the frame exists: outer rect of a centred fixed CLIENT_W x CLIENT_H window.
@@ -500,6 +501,19 @@ scr_shim:
  pop ebx
  pop ebp
  jmp [IAT_SCR]
+
+; FUN_004b1762 is the hit-test code's mouse-position getter: it reads x/y from lParam of the engine's copy of the
+; current message (0x513338), which is the pump's raw, unhalved window-pixel lParam (mouse_hook only fixes the
+; lParam handed to the child proc).  Hooked at VA 0x4b17a1 (the two movswl + two stores to the POINT at [ebp-8]):
+; halve x/y there.   in: ecx = y (word), edx = x (word)
+msgpt_fix:
+ movsx ecx,cx
+ sar ecx,1
+ movsx edx,dx
+ sar edx,1
+ mov [ebp-8],edx
+ mov [ebp-4],ecx
+ jmp 0x4b17ad
 
 ; ---- mouse messages: window coords -> virtual ----
 mouse_hook:

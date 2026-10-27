@@ -31,7 +31,11 @@ Untested in the real game.
 
 The original frame is a screen-sized popup and the game's 640x480 stage is centred inside it. Patch 4 makes the
 frame a normal resizable/maximisable window (initially a centred 640x480 client area) and keeps the stage centred
-as the window is resized. The stage itself is still drawn 1:1; scaling it to fill the window is a later step.
+as the window is resized. 
+Patch 5 scales the 640x480 stage to fill the window (largest 4:3 area, letter-boxed, centred): `BitBlt`/`StretchDIBits`
+thunks are redirected to shims that stretch blits aimed at the stage window's DC (`StretchBlt`, COLORONCOLOR), the stage
+child is resized on WM_SIZE, and mouse coordinates are mapped back to 640x480 in the child window proc and in the
+cursor-position helper.
 Implementation: new `.mtk` PE section with replacement code (`tools/window_patch.asm`, embedded as bytes in
 `tools/patch_exe.py`), a style change, a redirect of the "screen rect" helper (FUN_004b0150) and a WM_SIZE re-centre.
 Status: statically derived, untested on Windows until verified.

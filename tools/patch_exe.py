@@ -25,10 +25,14 @@ for off in (904222, 904340):
 # Code cave: 152 zero bytes at the end of the CODE section (VA 0x4d0568, file 0xCFB68) hold a 122-byte
 # stdcall WinHelpA replacement (tools/winhelp_shim.asm) that turns "...\x.hlp" into "...\x.htm" and
 # opens it with ShellExecuteA. The WinHelpA import thunk (VA 0x4d03ef, file 0xCF9EF) is redirected to it.
-import subprocess, os
-here = os.path.dirname(os.path.abspath(__file__))
-shim = subprocess.run(["nasm", "-f", "bin", os.path.join(here, "winhelp_shim.asm"), "-o", "/dev/stdout"],
-                      check=True, capture_output=True).stdout
+# Assembled from winhelp_shim.asm (nasm -f bin, org 0x4d0568); embedded so nasm is not needed to build.
+SHIM_HEX = (
+    "5589e5837d100274528b4d0c803900740341ebf88079ff7075148079fe6c750e"
+    "8079fd687508c641fe74c641ff6d68cc054d00e847faffff85c0741f68d4054d"
+    "0050e814faffff85c074106a016a006a00ff750c6a00ff7508ffd0b801000000"
+    "5dc210007368656c6c3332005368656c6c457865637574654100"
+)
+shim = bytes.fromhex("".join(SHIM_HEX.split()))
 assert len(shim) <= 152, len(shim)
 patch(0xCFB68, b"\0" * len(shim), shim)
 rel = 0x4D0568 - (0x4D03EF + 5)

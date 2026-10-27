@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the Windows-ready game folder from your own copy of the disc.
 
-usage: build_game.py MISSION_CD.iso OUTDIR      (needs Python 3, Pillow, nasm)
+usage: build_game.py MISSION_CD.iso OUTDIR      (needs Python 3 and Pillow: pip install pillow)
 Extracts the ISO (isoread.py), copies the Win32 game files (no Mac data, no installers), applies
 patch_exe.py to SSMWIN32.EXE, converts DATA/WIN/*.HLP to HTML (hlp2html.py) and adds config/.
 """

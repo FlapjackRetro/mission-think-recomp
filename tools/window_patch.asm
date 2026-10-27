@@ -8,6 +8,11 @@
 %define IAT_MWP 0x5196d8
 %define IAT_BB 0x519600
 %define IAT_SDIB 0x5195d4
+%define IAT_IR 0x5196f8
+%define IAT_SCR 0x5195a4
+%define IAT_GRB 0x5195cc
+%define IAT_CRR 0x519660
+%define IAT_DO 0x519620
 
 bits 32
 org 0x596000
@@ -28,6 +33,8 @@ entry_table:
   jmp near sdib_shim     ; +50
   jmp near mouse_hook    ; +55
   jmp near raw_stc       ; +60
+  jmp near invrect_shim  ; +65
+  jmp near scr_shim      ; +70
 
 ; RECT* screen_rect(RECT* out): replaces FUN_004b0150 ("screen rect").
 ; Before the frame exists: outer rect of a centred fixed CLIENT_W x CLIENT_H window.
@@ -245,24 +252,33 @@ mwp_shim:                ; MapWindowPoints(from,to,pts,n)
 init_gdi:
  cmp dword [pStretchBlt],0
  jne .r
+ push ebx
  push s_gdi
  call 0x4d0059
- push eax
+ mov ebx,eax
  push s_sbm
- push eax
+ push ebx
  call 0x4cffc3
  mov [pSetStretchBltMode],eax
- pop eax
- push s_sb
- push eax
+ push s_grd
+ push ebx
  call 0x4cffc3
- mov [pStretchBlt],eax
+ mov [pGetRegionData],eax
+ push s_ecr
+ push ebx
+ call 0x4cffc3
+ mov [pExtCreateRegion],eax
  push s_user
  call 0x4d0059
  push s_wfd
  push eax
  call 0x4cffc3
  mov [pWindowFromDC],eax
+ push s_sb
+ push ebx
+ call 0x4cffc3
+ mov [pStretchBlt],eax
+ pop ebx
 .r:
  ret
 
@@ -359,6 +375,132 @@ sdib_shim:
  pop ebp
  jmp [IAT_SDIB]
 
+; ---- invalidation / clipping: rects and regions the game hands to USER/GDI are virtual (1/F) ----
+; InvalidateRect(hwnd, RECT*, erase): scale the rect to real pixels (copy, the caller's RECT is untouched).
+; Without this, e.g. the client rect from the (virtual) GetClientRect only invalidates the top-left 640x480.
+invrect_shim:
+ push ebp
+ mov ebp,esp
+ sub esp,0x10
+ mov eax,[ebp+0xc]
+ test eax,eax
+ jz .p
+ mov ecx,[eax]
+ add ecx,ecx
+ mov [ebp-0x10],ecx
+ mov ecx,[eax+4]
+ add ecx,ecx
+ mov [ebp-0xc],ecx
+ mov ecx,[eax+8]
+ add ecx,ecx
+ mov [ebp-8],ecx
+ mov ecx,[eax+0xc]
+ add ecx,ecx
+ mov [ebp-4],ecx
+ push dword [ebp+0x10]
+ lea eax,[ebp-0x10]
+ push eax
+ push dword [ebp+8]
+ call [IAT_IR]
+ mov esp,ebp
+ pop ebp
+ ret 12
+.p:
+ mov esp,ebp
+ pop ebp
+ jmp [IAT_IR]
+
+; SelectClipRgn(hdc, hrgn): the engine clips its window blits to a region in virtual units
+; (e.g. 0,0,640,480 for a full repaint).  On a window DC that region must be scaled to real pixels,
+; otherwise the 2x-stretched blit is cropped to the top-left 640x480 (this was the "splash only
+; draws unscaled in the corner" bug).  Regions on memory DCs are left alone.
+scr_shim:
+ push ebp
+ mov ebp,esp
+ push ebx
+ push esi
+ push edi
+ sub esp,0x10
+ cmp dword [ebp+0xc],0
+ je .pass
+ push dword [ebp+8]
+ call is_window_dc
+ test eax,eax
+ jz .pass
+ sub esp,0xE00
+ mov edi,esp
+ push edi
+ push 0xE00
+ push dword [ebp+0xc]
+ call [pGetRegionData]
+ test eax,eax
+ jz .big
+ mov ebx,eax
+ shl dword [edi+0x10],1
+ shl dword [edi+0x14],1
+ shl dword [edi+0x18],1
+ shl dword [edi+0x1c],1
+ mov ecx,[edi+8]
+ lea edx,[edi+0x20]
+.l:
+ test ecx,ecx
+ jz .mk
+ shl dword [edx],1
+ shl dword [edx+4],1
+ shl dword [edx+8],1
+ shl dword [edx+12],1
+ add edx,16
+ dec ecx
+ jmp .l
+.mk:
+ push edi
+ push ebx
+ push 0
+ call [pExtCreateRegion]
+ jmp .have
+.big:                    ; region too complex for the stack buffer: use its scaled bounding box
+ lea esi,[ebp-0x1c]
+ push esi
+ push dword [ebp+0xc]
+ call [IAT_GRB]
+ mov eax,[esi+12]
+ add eax,eax
+ push eax
+ mov eax,[esi+8]
+ add eax,eax
+ push eax
+ mov eax,[esi+4]
+ add eax,eax
+ push eax
+ mov eax,[esi]
+ add eax,eax
+ push eax
+ call [IAT_CRR]
+.have:
+ test eax,eax
+ jz .pass
+ mov esi,eax
+ push esi
+ push dword [ebp+8]
+ call [IAT_SCR]
+ mov ebx,eax
+ push esi
+ call [IAT_DO]
+ mov eax,ebx
+ lea esp,[ebp-0xc]
+ pop edi
+ pop esi
+ pop ebx
+ pop ebp
+ ret 8
+.pass:
+ lea esp,[ebp-0xc]
+ pop edi
+ pop esi
+ pop ebx
+ pop ebp
+ jmp [IAT_SCR]
+
 ; ---- mouse messages: window coords -> virtual ----
 mouse_hook:
  push ebp
@@ -385,8 +527,12 @@ mouse_hook:
 pStretchBlt dd 0
 pSetStretchBltMode dd 0
 pWindowFromDC dd 0
+pGetRegionData dd 0
+pExtCreateRegion dd 0
 s_gdi db 'gdi32.dll',0
 s_user db 'user32.dll',0
 s_sb db 'StretchBlt',0
 s_sbm db 'SetStretchBltMode',0
 s_wfd db 'WindowFromDC',0
+s_grd db 'GetRegionData',0
+s_ecr db 'ExtCreateRegion',0

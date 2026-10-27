@@ -33,7 +33,16 @@ The game is virtualised to its native 640x480 world and shown at 2x (1280x960 cl
 not resizable yet). A new `.mtk` PE section (`tools/window_patch.asm`, embedded in `tools/patch_exe.py`) holds shims that
 scale child-window creation/moves by 2, scale client coordinates back to 640x480 (GetClientRect, ScreenToClient,
 ClientToScreen, MapWindowPoints), stretch BitBlt/StretchDIBits aimed at window DCs by 2, and halve mouse coordinates.
-A freely resizable window is a later step. Status: statically derived; verify on Windows.
+A freely resizable window is a later step.
+
+Clip regions and invalidation rects are virtual too. The engine clips every window blit with `SelectClipRgn` using a
+region in 640x480 units (e.g. `0,0,641,481` for a full repaint) and invalidates with a virtual rect from the hooked
+`GetClientRect`. Unscaled, Windows treats these as real pixels, so each 2x-stretched blit was cropped to the top-left
+640x480 - the opening splash (starfield / "The Learning Company" logo) showed up unscaled in the corner while later
+screens looked fine. Two more shims fix it: `SelectClipRgn` on a window DC rebuilds the region at 2x
+(`GetRegionData` -> scale -> `ExtCreateRegion`; bounding-box fallback for regions over 3.5 KB), and `InvalidateRect`
+scales its rect. Entries +65 / +70 of the `.mtk` jump table; thunks VA 0x4D036B and 0x4D0173.
+Status: verified on Windows 11 (splash, title card and intro fill the 1280x960 client area).
 
 ## Repository contents
 - `tools/`  patch + conversion tools (`build_game.py` builds a ready folder from your own `MISSION_CD.iso`)

@@ -27,6 +27,15 @@ HELP_PARTIALKEY("Contents") or HELP_CONTEXT(n)).
 - Topic link targets: |CONTEXT value order == topic order (rank), so hash -> topic = rank of its context value.
 Untested in the real game.
 
+## Resizable window (patch 4)
+
+The original frame is a screen-sized popup and the game's 640x480 stage is centred inside it. Patch 4 makes the
+frame a normal resizable/maximisable window (initially a centred 640x480 client area) and keeps the stage centred
+as the window is resized. The stage itself is still drawn 1:1; scaling it to fill the window is a later step.
+Implementation: new `.mtk` PE section with replacement code (`tools/window_patch.asm`, embedded as bytes in
+`tools/patch_exe.py`), a style change, a redirect of the "screen rect" helper (FUN_004b0150) and a WM_SIZE re-centre.
+Status: statically derived, untested on Windows until verified.
+
 ## Repository contents
 - `tools/`  patch + conversion tools (`build_game.py` builds a ready folder from your own `MISSION_CD.iso`)
 - `config/` portable config files copied next to the game (`tlc.ini`, `SSMWINCD.INI`, `Play.bat`)

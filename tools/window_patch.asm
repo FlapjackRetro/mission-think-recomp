@@ -1,13 +1,37 @@
+%define IAT_CWE 0x5197b4
+%define IAT_MW 0x5196cc
+%define IAT_SWP 0x51968c
+%define IAT_DWP 0x5197a8
+%define IAT_GCR 0x519748
+%define IAT_STC 0x5196a8
+%define IAT_CTS 0x5197c8
+%define IAT_MWP 0x5196d8
+%define IAT_BB 0x519600
+%define IAT_SDIB 0x5195d4
+
 bits 32
 org 0x596000
-; RECT* screen_rect(RECT* out)  -- replaces FUN_004b0150's "screen size" with the frame's size
+%define F 2
+%define CLIENT_W 1280
+%define CLIENT_H 960
 entry_table:
   jmp near screen_rect   ; +0
-  jmp near wm_size       ; +5
-  jmp near bitblt_shim   ; +10
-  jmp near sdib_shim     ; +15
-  jmp near mouse_hook    ; +20
-  jmp near stc_scaled    ; +25
+  jmp near cwe_shim      ; +5
+  jmp near mw_shim       ; +10
+  jmp near swp_shim      ; +15
+  jmp near dwp_shim      ; +20
+  jmp near gcr_shim      ; +25
+  jmp near stc_shim      ; +30
+  jmp near cts_shim      ; +35
+  jmp near mwp_shim      ; +40
+  jmp near bitblt_shim   ; +45
+  jmp near sdib_shim     ; +50
+  jmp near mouse_hook    ; +55
+  jmp near raw_stc       ; +60
+
+; RECT* screen_rect(RECT* out): replaces FUN_004b0150 ("screen rect").
+; Before the frame exists: outer rect of a centred fixed CLIENT_W x CLIENT_H window.
+; Afterwards: the frame's (virtual, i.e. 1/F scaled) client size plus its menu height.
 screen_rect:
  push ebp
  mov ebp,esp
@@ -24,16 +48,16 @@ screen_rect:
  lea edx,[ebp-0x10]
  push edx
  push eax
- call 0x4d03e3          ; GetClientRect(hwnd,&r)
+ call 0x4d03e3          ; GetClientRect (hooked: virtual units)
  push dword [0x511958]
  lea ecx,[ebp-0x30]
  push ecx
- call 0x4ac9af          ; non-client/menu metrics
+ call 0x4ac9af
  add esp,8
  mov esi,[ebp-0x2c]
  add esi,[ebp-0x28]
  add esi,[ebp-0x24]
- add esi,[ebp-4]        ; + client height
+ add esi,[ebp-4]
  mov dword [ebx],0
  mov dword [ebx+4],0
  mov eax,[ebp-8]
@@ -43,17 +67,17 @@ screen_rect:
 .initial:
  mov dword [ebp-0x10],0
  mov dword [ebp-0xc],0
- mov dword [ebp-8],640
- mov dword [ebp-4],480
+ mov dword [ebp-8],CLIENT_W
+ mov dword [ebp-4],CLIENT_H
  push 1
- push 0x02CF0000
+ push 0x02CA0000
  lea eax,[ebp-0x10]
  push eax
  call 0x4d04d3          ; AdjustWindowRect
  mov esi,[ebp-8]
- sub esi,[ebp-0x10]     ; w
+ sub esi,[ebp-0x10]
  mov eax,[ebp-4]
- sub eax,[ebp-0xc]      ; h
+ sub eax,[ebp-0xc]
  mov [ebp-0x20],eax
  push 0
  call 0x4d038f
@@ -66,6 +90,9 @@ screen_rect:
  call 0x4d038f
  sub eax,[ebp-0x20]
  sar eax,1
+ jns .ypos
+ xor eax,eax
+.ypos:
  mov [ebx+4],eax
  add eax,[ebp-0x20]
  mov [ebx+0xc],eax
@@ -76,84 +103,145 @@ screen_rect:
  mov esp,ebp
  pop ebp
  ret
-; WM_SIZE tail: recenter stage when both frame and stage exist
-wm_size:
- cmp dword [0x511958],0
- je .out
- cmp dword [0x513150],0
- je .out
- call fit_stage
-.out:
- jmp 0x4ae272
 
-; letterbox the stage (4:3) inside the frame client area
-fit_stage:
- push ebp
- mov ebp,esp
- sub esp,0x20
- push ebx
- mov eax,[0x511958]
- mov eax,[eax+0x9e]
+; int is_child(HWND)
+is_child:
+ push -16
+ push dword [esp+8]
+ call 0x4d037d          ; GetWindowLongA(hwnd, GWL_STYLE)
+ shr eax,30
+ and eax,1
+ ret 4
+
+; ---- window geometry: children are created/moved in virtual (1/F) units ----
+cwe_shim:                ; CreateWindowExA(ex,cls,name,style,x,y,w,h,...)
+ test dword [esp+0x10],0x40000000
+ jz .p
+ cmp dword [esp+0x14],0x80000000
+ je .a
+ shl dword [esp+0x14],1
+.a:
+ cmp dword [esp+0x18],0x80000000
+ je .b
+ shl dword [esp+0x18],1
+.b:
+ cmp dword [esp+0x1c],0x80000000
+ je .c
+ shl dword [esp+0x1c],1
+.c:
+ cmp dword [esp+0x20],0x80000000
+ je .p
+ shl dword [esp+0x20],1
+.p:
+ jmp [IAT_CWE]
+
+mw_shim:                 ; MoveWindow(hwnd,x,y,w,h,repaint)
+ push dword [esp+4]
+ call is_child
  test eax,eax
- jz .fo
- lea edx,[ebp-0x10]
- push edx
- push eax
- call 0x4d03e3
- mov eax,[ebp-8]       ; W
- mov ecx,[ebp-4]       ; H
+ jz .p
+ shl dword [esp+8],1
+ shl dword [esp+0xc],1
+ shl dword [esp+0x10],1
+ shl dword [esp+0x14],1
+.p:
+ jmp [IAT_MW]
+
+swp_shim:                ; SetWindowPos(hwnd,after,x,y,cx,cy,flags)
+ push dword [esp+4]
+ call is_child
  test eax,eax
- jle .fo
+ jz .p
+ shl dword [esp+0xc],1
+ shl dword [esp+0x10],1
+ shl dword [esp+0x14],1
+ shl dword [esp+0x18],1
+.p:
+ jmp [IAT_SWP]
+
+dwp_shim:                ; DeferWindowPos(hdwp,hwnd,after,x,y,cx,cy,flags)
+ push dword [esp+8]
+ call is_child
+ test eax,eax
+ jz .p
+ shl dword [esp+0x10],1
+ shl dword [esp+0x14],1
+ shl dword [esp+0x18],1
+ shl dword [esp+0x1c],1
+.p:
+ jmp [IAT_DWP]
+
+; ---- client coordinates are virtual (real / F) ----
+gcr_shim:                ; GetClientRect(hwnd, rect)
+ push dword [esp+8]
+ push dword [esp+8]
+ call [IAT_GCR]
+ test eax,eax
+ jz .r
+ mov ecx,[esp+8]
+ sar dword [ecx+8],1
+ sar dword [ecx+0xc],1
+.r:
+ ret 8
+
+stc_shim:                ; ScreenToClient(hwnd, pt)
+ push dword [esp+8]
+ push dword [esp+8]
+ call [IAT_STC]
+ test eax,eax
+ jz .r
+ mov ecx,[esp+8]
+ sar dword [ecx],1
+ sar dword [ecx+4],1
+.r:
+ ret 8
+
+raw_stc:
+ jmp [IAT_STC]
+
+cts_shim:                ; ClientToScreen(hwnd, pt)
+ mov ecx,[esp+8]
+ shl dword [ecx],1
+ shl dword [ecx+4],1
+ jmp [IAT_CTS]
+
+mwp_shim:                ; MapWindowPoints(from,to,pts,n)
+ cmp dword [esp+4],0
+ je .noin
+ mov ecx,[esp+0x10]
+ mov edx,[esp+0xc]
+.l1:
  test ecx,ecx
- jle .fo
- mov [ebp-0x18],eax
- mov [ebp-0x14],ecx
- lea edx,[eax+eax*2]
- shr edx,2             ; ch = W*3/4
- mov ebx,eax           ; cw = W
- cmp edx,ecx
- jle .fit
- mov edx,ecx           ; ch = H
- lea ebx,[ecx*4]
- mov eax,ebx
- xor edx,edx
- mov ebx,3
- div ebx               ; eax = H*4/3
- mov ebx,eax           ; cw
- mov edx,ecx           ; ch
-.fit:
- mov [ebp-0x20],ebx    ; cw
- mov [ebp-0x1c],edx    ; ch
- mov eax,[0x513150]
- mov eax,[eax+0x80]
- test eax,eax
- jz .fo
- mov ebx,eax           ; stage hwnd
- mov eax,[ebp-0x14]
- sub eax,[ebp-0x1c]
- sar eax,1
- mov ecx,[ebp-0x18]
- sub ecx,[ebp-0x20]
- sar ecx,1
- push 0x14
- push dword [ebp-0x1c]
- push dword [ebp-0x20]
+ jz .noin
+ shl dword [edx],1
+ shl dword [edx+4],1
+ add edx,8
+ dec ecx
+ jmp .l1
+.noin:
+ push dword [esp+0x10]
+ push dword [esp+0x10]
+ push dword [esp+0x10]
+ push dword [esp+0x10]
+ call [IAT_MWP]
  push eax
- push ecx
- push 0
- push ebx
- call 0x4d02c9         ; SetWindowPos
- push 0
- push 0
- push ebx
- call 0x4d036b         ; InvalidateRect(stage, NULL, FALSE)
-.fo:
- pop ebx
- mov esp,ebp
- pop ebp
- ret
+ cmp dword [esp+0xc],0
+ je .done
+ mov ecx,[esp+0x14]
+ mov edx,[esp+0x10]
+.l2:
+ test ecx,ecx
+ jz .done
+ sar dword [edx],1
+ sar dword [edx+4],1
+ add edx,8
+ dec ecx
+ jmp .l2
+.done:
+ pop eax
+ ret 0x10
 
-; ---------------- scaling support ----------------
+; ---- drawing: blits aimed at a window DC are stretched by F ----
 init_gdi:
  cmp dword [pStretchBlt],0
  jne .r
@@ -178,82 +266,27 @@ init_gdi:
 .r:
  ret
 
-; int stage_size(HDC, int out[2]) -> 1 if hdc is the stage window's DC and it is not 640x480
-stage_size:
- push ebp
- mov ebp,esp
- sub esp,0x10
- push ebx
+; int is_window_dc(HDC)
+is_window_dc:
  call init_gdi
- mov eax,[0x513150]
- test eax,eax
- jz .no
- mov ebx,[eax+0x80]
- test ebx,ebx
- jz .no
- push dword [ebp+8]
+ push dword [esp+4]
  call [pWindowFromDC]
- cmp eax,ebx
- jne .no
- lea edx,[ebp-0x10]
- push edx
- push ebx
- call 0x4d03e3
- mov eax,[ebp-8]
- mov ecx,[ebp-4]
- test eax,eax
- jle .no
- test ecx,ecx
- jle .no
- cmp eax,640
- jne .yes
- cmp ecx,480
- je .no
-.yes:
- mov edx,[ebp+0xc]
- mov [edx],eax
- mov [edx+4],ecx
- mov eax,1
- jmp .ret
-.no:
- xor eax,eax
-.ret:
- pop ebx
- mov esp,ebp
- pop ebp
- ret 8
+ neg eax
+ sbb eax,eax
+ neg eax
+ ret 4
 
-; dest rect scaling: inputs [ebp+0xc..0x18]=x,y,w,h ; W=[ebp-0x18] H=[ebp-0x14] ; outputs ebx=x0, [ebp-0xc]=y0, [ebp-0x10]=wd, [ebp-8]=hd
 %macro CALCDEST 0
- mov esi,[ebp-0x18]
- mov edi,[ebp-0x14]
- mov ecx,640
- mov eax,[ebp+0xc]
- imul eax,esi
- cdq
- idiv ecx
- mov ebx,eax
- mov eax,[ebp+0xc]
- add eax,[ebp+0x14]
- imul eax,esi
- add eax,639
- cdq
- idiv ecx
- sub eax,ebx
- mov [ebp-0x10],eax
- mov ecx,480
+ mov ebx,[ebp+0xc]
+ shl ebx,1
  mov eax,[ebp+0x10]
- imul eax,edi
- cdq
- idiv ecx
+ shl eax,1
  mov [ebp-0xc],eax
- mov eax,[ebp+0x10]
- add eax,[ebp+0x18]
- imul eax,edi
- add eax,479
- cdq
- idiv ecx
- sub eax,[ebp-0xc]
+ mov eax,[ebp+0x14]
+ shl eax,1
+ mov [ebp-0x10],eax
+ mov eax,[ebp+0x18]
+ shl eax,1
  mov [ebp-8],eax
  push 3
  push dword [ebp+8]
@@ -265,12 +298,8 @@ bitblt_shim:
  mov ebp,esp
  sub esp,0x20
  push ebx
- push esi
- push edi
- lea eax,[ebp-0x18]
- push eax
  push dword [ebp+8]
- call stage_size
+ call is_window_dc
  test eax,eax
  jz .pass
  CALCDEST
@@ -286,31 +315,23 @@ bitblt_shim:
  push ebx
  push dword [ebp+8]
  call [pStretchBlt]
- pop edi
- pop esi
  pop ebx
  mov esp,ebp
  pop ebp
  ret 0x24
 .pass:
- pop edi
- pop esi
  pop ebx
  mov esp,ebp
  pop ebp
- jmp [0x519600]
+ jmp [IAT_BB]
 
 sdib_shim:
  push ebp
  mov ebp,esp
  sub esp,0x20
  push ebx
- push esi
- push edi
- lea eax,[ebp-0x18]
- push eax
  push dword [ebp+8]
- call stage_size
+ call is_window_dc
  test eax,eax
  jz .pass
  CALCDEST
@@ -327,99 +348,39 @@ sdib_shim:
  push dword [ebp-0xc]
  push ebx
  push dword [ebp+8]
- call [0x5195d4]
- pop edi
- pop esi
+ call [IAT_SDIB]
  pop ebx
  mov esp,ebp
  pop ebp
  ret 0x34
 .pass:
- pop edi
- pop esi
  pop ebx
  mov esp,ebp
  pop ebp
- jmp [0x5195d4]
+ jmp [IAT_SDIB]
 
-; ---------------- mouse mapping ----------------
-; void scale_pt(HWND, POINT*) : window client coords -> 640x480 game coords, only for the stage window
-scale_pt:
- push ebp
- mov ebp,esp
- sub esp,0x10
- push ebx
- mov eax,[0x513150]
- test eax,eax
- jz .o
- mov eax,[eax+0x80]
- cmp eax,[ebp+8]
- jne .o
- lea edx,[ebp-0x10]
- push edx
- push eax
- call 0x4d03e3
- mov ebx,[ebp+0xc]
- mov ecx,[ebp-8]
- test ecx,ecx
- jle .o
- cmp dword [ebp-4],0
- jle .o
- mov eax,[ebx]
- imul eax,640
- cdq
- idiv ecx
- mov [ebx],eax
- mov ecx,[ebp-4]
- mov eax,[ebx+4]
- imul eax,480
- cdq
- idiv ecx
- mov [ebx+4],eax
-.o:
- pop ebx
- mov esp,ebp
- pop ebp
- ret 8
-
+; ---- mouse messages: window coords -> virtual ----
 mouse_hook:
  push ebp
  mov ebp,esp
- sub esp,8
  mov eax,[ebp+0xc]
  sub eax,0x200
  cmp eax,9
  ja .d
  movsx eax,word [ebp+0x14]
- mov [ebp-8],eax
- movsx eax,word [ebp+0x16]
- mov [ebp-4],eax
- lea eax,[ebp-8]
- push eax
- push dword [ebp+8]
- call scale_pt
- movzx eax,word [ebp-8]
- movzx ecx,word [ebp-4]
+ sar eax,1
+ movzx eax,ax
+ movsx ecx,word [ebp+0x16]
+ sar ecx,1
  shl ecx,16
  or eax,ecx
  mov [ebp+0x14],eax
 .d:
- mov esp,ebp
  pop ebp
  push ebp
  mov ebp,esp
  add esp,0xffffff3c
  jmp 0x4b46aa
-
-stc_scaled:
- push dword [esp+8]
- push dword [esp+8]
- call 0x4d02f3
- push dword [esp+8]
- push dword [esp+8]
- call scale_pt
- mov eax,1
- ret 8
 
 pStretchBlt dd 0
 pSetStretchBltMode dd 0

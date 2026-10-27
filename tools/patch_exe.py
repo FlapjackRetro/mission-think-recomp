@@ -37,56 +37,50 @@ assert len(shim) <= 152, len(shim)
 patch(0xCFB68, b"\0" * len(shim), shim)
 rel = 0x4D0568 - (0x4D03EF + 5)
 patch(0xCF9EF, bytes.fromhex("ff2550975100"), b"\xe9" + struct.pack("<i", rel) + b"\xcc")
-# Patch 4 - resizable window (see tools/window_patch.asm; assembled with nasm -f bin, org 0x596000, embedded).
-# The game builds its frame as a borderless-style popup (mode 3) sized to the screen and centres a 640x480
-# stage child in it using FUN_004b0150 (= "screen rect"). We
-#   a) append a new RWX PE section ".mtk" (VA 0x596000) holding replacement code,
-#   b) make the frame a normal WS_OVERLAPPEDWINDOW (style imm at VA 0x4ac742),
-#   c) redirect FUN_004b0150 to return the frame's client size (or a centred 640x480 outer rect before the
-#      frame exists), so the existing centring maths keeps the stage centred in whatever size the window is,
-#   d) replace the old WM_SIZE child-stretching code (VA 0x4adb49) with a call to the game's own
-#      re-centre routine (FUN_00424354).
+# Patch 4 - fixed 2x window (1280x960 client).  Source: tools/window_patch.asm (nasm -f bin, org 0x596000, embedded).
+# The game is virtualised to a 640x480 world: a new RWX PE section ".mtk" holds shims that
+#   * make the frame a normal captioned window (style imm at VA 0x4ac742) with a 1280x960 client area,
+#   * redirect FUN_004b0150 (the "screen rect" helper) so layout still sees a 640x480 (virtual) frame,
+#   * scale child-window creation/move/size (CreateWindowExA, MoveWindow, SetWindowPos, DeferWindowPos) by 2,
+#   * scale client coordinates back down (GetClientRect, ScreenToClient, ClientToScreen, MapWindowPoints),
+#   * stretch BitBlt/StretchDIBits aimed at window DCs by 2 (COLORONCOLOR = clean pixel doubling),
+#   * halve mouse coordinates in the child-window proc (FUN_004b46a1).
 WINDOW_HEX = (
-    "e919000000e9dc000000e952020000e903030000e915040000e95e0400005589"
-    "e583ec3053568b5d08a15819510085c0744a8b809e00000085c074408d55f052"
-    "50e89da3f3ffff35581951008d4dd051e85a69f1ff83c4088b75d40375d80375"
-    "dc0375fcc70300000000c74304000000008b45f889430889730ceb62c745f000"
-    "000000c745f400000000c745f880020000c745fce00100006a01680000cf028d"
-    "45f050e82ba4f3ff8b75f82b75f08b45fc2b45f48945e06a00e8d1a2f3ff29f0"
-    "d1f8890301f08943086a01e8bfa2f3ff2b45e0d1f88943040345e089430c89d8"
-    "5e5b89ec5dc3833d5819510000740e833d50315100007405e805000000e97081"
-    "f1ff5589e583ec2053a1581951008b809e00000085c00f84850000008d55f052"
-    "50e8bda2f3ff8b45f88b4dfc85c07e7185c97e6d8945e8894dec8d1440c1ea02"
-    "89c339ca7e1889ca8d1c8d0000000089d831d2bb03000000f7f389c389ca895d"
-    "e08955e4a1503151008b808000000085c0742e89c38b45ec2b45e4d1f88b4de8"
-    "2b4de0d1f96a14ff75e4ff75e050516a0053e832a1f3ff6a006a0053e8caa1f3"
-    "ff5b89ec5dc3833d9e64590000754668aa645900e8a09ef3ff5068ca64590050"
-    "e8fe9df3ffa3a26459005868bf64590050e8ed9df3ffa39e64590068b4645900"
-    "e8749ef3ff68dc64590050e8d39df3ffa3a6645900c35589e583ec1053e8a4ff"
-    "ffffa15031510085c0744d8b988000000085db7443ff7508ff15a664590039d8"
-    "75368d55f05253e8b7a1f3ff8b45f88b4dfc85c07e2285c97e1e3d8002000075"
-    "0881f9e0010000740f8b550c8902894a04b801000000eb0231c05b89ec5dc208"
-    "005589e583ec205356578d45e850ff7508e880ffffff85c00f848d0000008b75"
-    "e88b7decb9800200008b450c0fafc699f7f989c38b450c0345140fafc6057f02"
-    "000099f7f929d88945f0b9e00100008b45100fafc799f7f98945f48b45100345"
-    "180fafc705df01000099f7f92b45f48945f86a03ff7508ff15a2645900ff7528"
-    "ff7518ff7514ff7524ff7520ff751cff75f8ff75f0ff75f453ff7508ff159e64"
-    "59005f5e5b89ec5dc224005f5e5b89ec5dff25009651005589e583ec20535657"
-    "8d45e850ff7508e8cafeffff85c00f84930000008b75e88b7decb9800200008b"
-    "450c0fafc699f7f989c38b450c0345140fafc6057f02000099f7f929d88945f0"
-    "b9e00100008b45100fafc799f7f98945f48b45100345180fafc705df01000099"
-    "f7f92b45f48945f86a03ff7508ff15a2645900ff7538ff7534ff7530ff752cff"
-    "7528ff7524ff7520ff751cff75f8ff75f0ff75f453ff7508ff15d49551005f5e"
-    "5b89ec5dc234005f5e5b89ec5dff25d49551005589e583ec1053a15031510085"
-    "c074448b80800000003b450875398d55f05250e8eb9ff3ff8b5d0c8b4df885c9"
-    "7e25837dfc007e1f8b0369c08002000099f7f989038b4dfc8b430469c0e00100"
-    "0099f7f98943045b89ec5dc208005589e583ec088b450c2d0002000083f80977"
-    "2a0fbf45148945f80fbf45168945fc8d45f850ff7508e878ffffff0fb745f80f"
-    "b74dfcc1e11009c889451489ec5d5589e581c43cffffffe92ee2f1ffff742408"
-    "ff742408e86a9ef3ffff742408ff742408e83dffffffb801000000c208000000"
-    "0000000000000000000067646933322e646c6c007573657233322e646c6c0053"
-    "747265746368426c740053657453747265746368426c744d6f64650057696e64"
-    "6f7746726f6d444300"
+    "e93c000000e917010000e95a010000e978010000e996010000e9b4010000e9ce"
+    "010000e9ed010000e9f7010000e9b1020000e91d030000e98f030000e9ce0100"
+    "005589e583ec3053568b5d08a15819510085c0744a8b809e00000085c074408d"
+    "55f05250e87aa3f3ffff35581951008d4dd051e83769f1ff83c4088b75d40375"
+    "d80375dc0375fcc70300000000c74304000000008b45f889430889730ceb66c7"
+    "45f000000000c745f400000000c745f800050000c745fcc00300006a01680000"
+    "ca028d45f050e808a4f3ff8b75f82b75f08b45fc2b45f48945e06a00e8aea2f3"
+    "ff29f0d1f8890301f08943086a01e89ca2f3ff2b45e0d1f8790231c089430403"
+    "45e089430c89d85e5b89ec5dc36af0ff742408e865a2f3ffc1e81e83e001c204"
+    "00f7442410000000407438817c2414000000807404d1642414817c2418000000"
+    "807404d1642418817c241c000000807404d164241c817c2420000000807404d1"
+    "642420ff25b4975100ff742404e89bffffff85c07410d1642408d164240cd164"
+    "2410d1642414ff25cc965100ff742404e878ffffff85c07410d164240cd16424"
+    "10d1642414d1642418ff258c965100ff742408e855ffffff85c07410d1642410"
+    "d1642414d1642418d164241cff25a8975100ff742408ff742408ff1548975100"
+    "85c0740a8b4c2408d17908d1790cc20800ff742408ff742408ff15a896510085"
+    "c074098b4c2408d139d17904c20800ff25a89651008b4c2408d121d16104ff25"
+    "c8975100837c24040074178b4c24108b54240c85c9740bd122d1620483c20849"
+    "ebf1ff742410ff742410ff742410ff742410ff15d896510050837c240c007417"
+    "8b4c24148b54241085c9740bd13ad17a0483c20849ebf158c21000833d016459"
+    "00007546680d645900e8cb9df3ff50682d64590050e8299df3ffa30564590058"
+    "682264590050e8189df3ffa3016459006817645900e89f9df3ff683f64590050"
+    "e8fe9cf3ffa309645900c3e8abffffffff742404ff1509645900f7d819c0f7d8"
+    "c204005589e583ec2053ff7508e8d9ffffff85c074548b5d0cd1e38b4510d1e0"
+    "8945f48b4514d1e08945f08b4518d1e08945f86a03ff7508ff1505645900ff75"
+    "28ff7518ff7514ff7524ff7520ff751cff75f8ff75f0ff75f453ff7508ff1501"
+    "6459005b89ec5dc224005b89ec5dff25009651005589e583ec2053ff7508e868"
+    "ffffff85c0745a8b5d0cd1e38b4510d1e08945f48b4514d1e08945f08b4518d1"
+    "e08945f86a03ff7508ff1505645900ff7538ff7534ff7530ff752cff7528ff75"
+    "24ff7520ff751cff75f8ff75f0ff75f453ff7508ff15d49551005b89ec5dc234"
+    "005b89ec5dff25d49551005589e58b450c2d0002000083f80977170fbf4514d1"
+    "f80fb7c00fbf4d16d1f9c1e11009c88945145d5589e581c43cffffffe9a9e2f1"
+    "ff00000000000000000000000067646933322e646c6c007573657233322e646c"
+    "6c0053747265746368426c740053657453747265746368426c744d6f64650057"
+    "696e646f7746726f6d444300"
 )
 code = bytes.fromhex("".join(WINDOW_HEX.split()))
 SEC_RVA, SEC_RAW = 0x196000, 0x18B000
@@ -105,18 +99,23 @@ assert d[sec:sec + 40] == b"\0" * 40
 d[sec:sec + 40] = b".mtk\0\0\0\0" + struct.pack("<IIIIIIHHI", 0x1000, SEC_RVA, RAWSZ, SEC_RAW, 0, 0, 0, 0, 0xE0000060)
 def va2off(va): return va - 0x400A00
 def jmp(frm, to): return b"\xe9" + struct.pack("<i", to - (frm + 5))
-patch(va2off(0x4AC742), bytes.fromhex("00000a82"), bytes.fromhex("0000cf02"))
-patch(va2off(0x4B0150), bytes.fromhex("55 8b ec 83 c4".replace(" ", "")), jmp(0x4B0150, 0x596000))
-patch(va2off(0x4ADB49), bytes.fromhex("837dd8000f"), jmp(0x4ADB49, 0x596005))
 def call(frm, to): return b"\xe8" + struct.pack("<i", to - (frm + 5))
-# Patch 5 - scale the 640x480 stage to the window (see window_patch.asm)
-#   BitBlt / StretchDIBits import thunks -> shims that stretch blits aimed at the stage window's DC
-patch(va2off(0x4D01FD), bytes.fromhex("ff2500965100"), jmp(0x4D01FD, 0x59600A) + b"\xcc")
-patch(va2off(0x4D01BB), bytes.fromhex("ff25d4955100"), jmp(0x4D01BB, 0x59600F) + b"\xcc")
-#   child-window proc (FUN_004b46a1): map mouse coordinates back to 640x480 before the game sees them
-patch(va2off(0x4B46A1), bytes.fromhex("558bec81c43cffffff"), jmp(0x4B46A1, 0x596014) + b"\xcc" * 4)
-#   cursor-position helper (FUN_004b3783): ScreenToClient -> ScreenToClient + scale
-patch(va2off(0x4B37A9), bytes.fromhex("e845cb0100"), call(0x4B37A9, 0x596019))
+S = 0x596000
+patch(va2off(0x4AC742), bytes.fromhex("00000a82"), bytes.fromhex("0000ca02"))   # frame style 0x02CA0000
+patch(va2off(0x4B0150), bytes.fromhex("558bec83c4"), jmp(0x4B0150, S))              # screen rect
+patch(va2off(0x4ADB49), bytes.fromhex("837dd8000f"), jmp(0x4ADB49, 0x4AE272))      # drop old WM_SIZE child stretch
+# import thunks (jmp [iat]) -> shims.  (thunk VA, expected bytes, shim entry offset)
+for va, iat, off in ((0x4D0485, "b4975100", 5), (0x4D0329, "cc965100", 10), (0x4D02C9, "8c965100", 15),
+                     (0x4D0473, "a8975100", 20), (0x4D03E3, "48975100", 25), (0x4D02F3, "a8965100", 30),
+                     (0x4D04A3, "c8975100", 35), (0x4D033B, "d8965100", 40), (0x4D01FD, "00965100", 45),
+                     (0x4D01BB, "d4955100", 50)):
+    patch(va2off(va), bytes.fromhex("ff25" + iat), jmp(va, S + off) + b"\xcc")
+patch(va2off(0x4B46A1), bytes.fromhex("558bec81c43cffffff"), jmp(0x4B46A1, S + 55) + b"\xcc" * 4)  # mouse
+# non-client mouse re-posts convert screen->client themselves and re-enter the proc: use the unscaled ScreenToClient
+for va in (0x4B4999, 0x4B4F73):
+    o = va2off(va)
+    assert d[o] == 0xE8 and va + 5 + struct.unpack_from("<i", d, o + 1)[0] == 0x4D02F3, hex(va)
+    d[o:o + 5] = call(va, S + 60)
 open(dst, "wb").write(d)
 for l, p in (("original", src), ("patched ", dst)):
     print(l, hashlib.sha256(open(p, "rb").read()).hexdigest())

@@ -47,7 +47,16 @@ by `mouse_hook`) the engine keeps a copy of the pump's current message at 0x5133
 getter behind the hover/cursor/click hit-tests, `FUN_004a3246`) reads x/y from that raw `lParam`. Unhalved, hotspots only
 matched while the pointer was in the top-left 640x480 real pixels. `msgpt_fix` (entry +75) halves it at the read
 (hook VA 0x4B17A1).
-Status: verified on Windows 11 (splash, title card and intro fill the 1280x960 client area; button hover works everywhere).
+Status: verified on Windows 11 (splash, title card and intro fill the client area; button hover works everywhere).
+
+### Selectable window size
+The scale is no longer fixed at 2x. On startup a small dialog (built in memory by the `.mtk` shim, no resources needed) offers
+640x480 (1x), 800x600 (1.25x), 1024x768 (1.6x), 1280x960 (2x) and 1600x1200 (2.5x). The choice is stored in `tlc.ini` next to the
+exe (`[Display] Width=...`) and preselected next time; closing the dialog keeps the saved/default size. `[Display] Ask=0` in
+`tlc.ini` skips the dialog and always uses `Width`. All former `shl/sar 1` scaling is now `up(x) = round(x*Width/640)` /
+`down(x) = x*640/Width`; scaled child rects use `x' = up(x)`, `w' = up(x+w) - up(x)` and blit destinations likewise, so
+neighbouring pieces still tile without gaps at the fractional scales. Blits use nearest-neighbour (COLORONCOLOR), so 1.25x and 1.6x
+have slightly uneven pixel sizes; 1x/2x/2.5x... (2.5x too, as every source pixel maps to 2 or 3 pixels) are the cleanest.
 
 ## Repository contents
 - `tools/`  patch + conversion tools (`build_game.py` builds a ready folder from your own `MISSION_CD.iso`)
